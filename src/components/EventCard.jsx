@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
-import { collection, onSnapshot, doc, updateDoc } from 'firebase/firestore'
-import { db } from '../firebase'
+import { collection, onSnapshot, doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore'
+import { ref as storageRef, uploadBytes, deleteObject } from 'firebase/storage'
+import { db, storage } from '../firebase'
 import PhotoCarousel from './PhotoCarousel'
-import StarRating from './StarRating'
 import SubEventCard from './SubEventCard'
+import DualRating from './DualRating'
 
 function formatDate(ts) {
   if (!ts) return ''
@@ -11,36 +12,55 @@ function formatDate(ts) {
   return d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'long', year: 'numeric' })
 }
 
-function avg(arr) {
-  const rated = arr.filter(s => s.rating != null)
-  if (!rated.length) return null
-  return Math.round(rated.reduce((acc, s) => acc + s.rating, 0) / rated.length * 10) / 10
-}
-
 function getDate(ts) {
   if (!ts) return new Date(0)
   return ts.toDate ? ts.toDate() : new Date(ts)
+}
+
+function relativeDays(ts) {
+  if (!ts) return ''
+  const d = getDate(ts)
+  const now = new Date()
+  const startOf = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const diffDays = Math.round((startOf(d) - startOf(now)) / 86400000)
+  if (diffDays === 0) return 'bugün'
+  if (diffDays === 1) return 'yarın'
+  if (diffDays === -1) return 'dün'
+  if (diffDays > 1) return `${diffDays} gün sonra`
+  return `${Math.abs(diffDays)} gün önce`
+}
+
+function avgFromSubs(arr) {
+  const ratings = []
+  for (const s of arr) {
+    if (s.rating != null) ratings.push(s.rating)
+    if (s.rating_mirza != null) ratings.push(s.rating_mirza)
+  }
+  if (!ratings.length) return null
+  return Math.round(ratings.reduce((a, b) => a + b, 0) / ratings.length * 10) / 10
+}
+
+function avgFromSelf(e) {
+  const r = []
+  if (e.rating != null) r.push(e.rating)
+  if (e.rating_mirza != null) r.push(e.rating_mirza)
+  if (!r.length) return null
+  return Math.round(r.reduce((a, b) => a + b, 0) / r.length * 10) / 10
 }
 
 export default function EventCard({ event }) {
   const [expanded, setExpanded] = useState(false)
   const [subEvents, setSubEvents] = useState([])
   const [loadingSubs, setLoadingSubs] = useState(false)
-  const [hovered, setHovered] = useState(null)
-
-  // Direct rating + comment state (for events without subEvents)
-  const [rating, setRating] = useState(event.rating ?? null)
-  const [comment, setComment] = useState(event.comment ?? '')
-  const [savingRating, setSavingRating] = useState(false)
-  const [savingComment, setSavingComment] = useState(false)
-  const lastSavedComment = useRef(event.comment ?? '')
+  const [uploading, setUploading] = useState(false)
+  const [uploadErr, setUploadErr] = useState(null)
+  const fileInputRef = useRef(null)
 
   const hasSubEvents = event.hasSubEvents
   const isFuture = getDate(event.date) > new Date()
 
   useEffect(() => {
-    if (!expanded || !hasSubEvents) return
-
+    if (!hasSubEvents) return
     setLoadingSubs(true)
     const unsub = onSnapshot(collection(db, 'events', event.id, 'subEvents'), snap => {
       const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
@@ -49,35 +69,47 @@ export default function EventCard({ event }) {
       setLoadingSubs(false)
     })
     return unsub
-  }, [expanded, hasSubEvents, event.id])
+  }, [hasSubEvents, event.id])
 
-  const avgRating = hasSubEvents ? avg(subEvents) : null
+  const avgRating = hasSubEvents ? avgFromSubs(subEvents) : avgFromSelf(event)
 
-  async function handleDirectRate(star) {
-    if (isFuture) return
-    setRating(star)
-    setSavingRating(true)
+  async function saveDirect(fields) {
+    await updateDoc(doc(db, 'events', event.id), fields)
+  }
+
+  async function handleDeletePhoto(photoUrl) {
     try {
-      await updateDoc(doc(db, 'events', event.id), { rating: star })
-    } finally {
-      setSavingRating(false)
+      await updateDoc(doc(db, 'events', event.id), { photos: arrayRemove(photoUrl) })
+      try {
+        await deleteObject(storageRef(storage, photoUrl))
+      } catch (err) {
+        console.warn('storage delete failed (file may already be gone)', err)
+      }
+    } catch (err) {
+      console.error('delete failed', err)
+      throw err
     }
   }
 
-  async function handleCommentBlur() {
-    const trimmed = comment.trim()
-    if (trimmed === lastSavedComment.current) return
-    setSavingComment(true)
+  async function handleFileChange(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setUploadErr(null)
+    setUploading(true)
     try {
-      await updateDoc(doc(db, 'events', event.id), { comment: trimmed })
-      lastSavedComment.current = trimmed
+      const ext = file.name.includes('.') ? file.name.split('.').pop() : 'jpg'
+      const path = `events/${event.id}/${Date.now()}.${ext}`
+      const r = storageRef(storage, path)
+      await uploadBytes(r, file)
+      const gsUrl = `gs://${r.bucket}/${path}`
+      await updateDoc(doc(db, 'events', event.id), { photos: arrayUnion(gsUrl) })
+    } catch (err) {
+      console.error('upload failed', err)
+      setUploadErr(err.message || 'yükleme başarısız')
     } finally {
-      setSavingComment(false)
+      setUploading(false)
     }
-  }
-
-  function handleSubRated(subId, star, c) {
-    setSubEvents(prev => prev.map(s => s.id === subId ? { ...s, rating: star, comment: c } : s))
   }
 
   return (
@@ -85,21 +117,48 @@ export default function EventCard({ event }) {
       style={{ background: '#ffffff', borderColor: '#e5e0d8' }}>
 
       {event.photos?.length > 0 && (
-        <PhotoCarousel photos={event.photos} />
+        <PhotoCarousel photos={event.photos} onDelete={handleDeletePhoto} />
       )}
 
       <div className="p-5 flex flex-col gap-4">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-medium px-2.5 py-1 rounded-lg"
-            style={{ background: '#f2efe9', color: '#7a706b' }}>
-            {formatDate(event.date)}
-          </span>
-          {isFuture && (
-            <span className="text-xs font-medium px-2.5 py-1 rounded-lg"
-              style={{ background: '#dcecd8', color: '#3d7a3d' }}>
-              yakında
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div className="flex flex-col gap-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-medium px-2.5 py-1 rounded-lg"
+                style={{ background: '#f2efe9', color: '#7a706b' }}>
+                {formatDate(event.date)}
+              </span>
+              {isFuture && (
+                <span className="text-xs font-medium px-2.5 py-1 rounded-lg"
+                  style={{ background: '#dcecd8', color: '#3d7a3d' }}>
+                  yakında
+                </span>
+              )}
+            </div>
+            <span className="text-[11px] pl-1" style={{ color: '#c4bdb5' }}>
+              {relativeDays(event.date)}
             </span>
-          )}
+          </div>
+
+          <div className="flex flex-col items-end gap-1 ml-auto">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleFileChange}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="text-[11px] font-medium px-3 py-1.5 rounded-xl transition-all active:scale-95 disabled:opacity-50 whitespace-nowrap"
+              style={{ background: '#1e1916', color: '#f2efe9' }}>
+              {uploading ? 'yükleniyor…' : '＋ fotoğraf'}
+            </button>
+            {uploadErr && (
+              <span className="text-[10px]" style={{ color: '#c4847e' }}>{uploadErr}</span>
+            )}
+          </div>
         </div>
 
         <div>
@@ -115,18 +174,12 @@ export default function EventCard({ event }) {
 
         {isFuture ? (
           <div className="flex items-center gap-2">
-            <img
-              src="https://i.kym-cdn.com/entries/icons/original/000/026/489/crying-cat-meme-i2.jpg"
-              alt="henüz erken"
-              className="w-8 h-8 rounded-lg object-cover"
-              onError={e => { e.target.style.display = 'none' }}
-            />
             <span className="text-xs" style={{ color: '#9a8f87' }}>
               gerçekleştikten sonra beklerim 😇
             </span>
           </div>
-        ) : hasSubEvents ? (
-          <div className="flex items-center gap-2">
+        ) : (
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs" style={{ color: '#9a8f87' }}>ortalama puan</span>
             {avgRating != null
               ? <span className="text-sm font-semibold px-2.5 py-0.5 rounded-lg"
@@ -136,45 +189,9 @@ export default function EventCard({ event }) {
               : <span className="text-xs" style={{ color: '#c4bdb5' }}>henüz puan yok</span>
             }
           </div>
-        ) : (
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-2 flex-wrap">
-              <StarRating
-                value={rating}
-                onChange={handleDirectRate}
-                hovered={hovered}
-                onHover={setHovered}
-              />
-              {savingRating && <span className="text-xs soft-pulse" style={{ color: '#9a8f87' }}>kaydediliyor…</span>}
-            </div>
-
-            {rating != null && (
-              <div className="flex flex-col gap-1 slide-down">
-                <textarea
-                  rows={2}
-                  value={comment}
-                  onChange={e => setComment(e.target.value)}
-                  onBlur={handleCommentBlur}
-                  placeholder="yorumun… (isteğe bağlı)"
-                  className="w-full rounded-xl px-3 py-2 text-xs outline-none resize-none transition-all"
-                  style={{
-                    background: '#faf9f6',
-                    border: '1.5px solid #e0d6cc',
-                    color: '#1e1916',
-                    fontFamily: 'Montserrat, sans-serif',
-                  }}
-                />
-                {savingComment && (
-                  <span className="text-[10px] self-end soft-pulse" style={{ color: '#9a8f87' }}>
-                    kaydediliyor…
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
         )}
 
-        {hasSubEvents && !isFuture && (
+        {!isFuture && (
           <button
             onClick={() => setExpanded(e => !e)}
             className="self-start text-xs font-medium px-3 py-1.5 rounded-xl transition-all active:scale-95"
@@ -183,17 +200,23 @@ export default function EventCard({ event }) {
           </button>
         )}
 
-        {expanded && hasSubEvents && (
-          <div className="flex flex-col gap-2 slide-down border-t pt-4" style={{ borderColor: '#e5e0d8' }}>
-            {loadingSubs && (
-              <p className="text-xs text-center py-4 soft-pulse" style={{ color: '#9a8f87' }}>yükleniyor…</p>
+        {expanded && !isFuture && (
+          <div className="flex flex-col gap-3 slide-down border-t pt-4" style={{ borderColor: '#e5e0d8' }}>
+            {hasSubEvents ? (
+              <>
+                {loadingSubs && (
+                  <p className="text-xs text-center py-4 soft-pulse" style={{ color: '#9a8f87' }}>yükleniyor…</p>
+                )}
+                {!loadingSubs && subEvents.length === 0 && (
+                  <p className="text-xs text-center py-4" style={{ color: '#c4bdb5' }}>alt etkinlik bulunamadı</p>
+                )}
+                {subEvents.map(sub => (
+                  <SubEventCard key={sub.id} sub={sub} eventId={event.id} />
+                ))}
+              </>
+            ) : (
+              <DualRating data={event} onSave={saveDirect} />
             )}
-            {!loadingSubs && subEvents.length === 0 && (
-              <p className="text-xs text-center py-4" style={{ color: '#c4bdb5' }}>alt etkinlik bulunamadı</p>
-            )}
-            {subEvents.map(sub => (
-              <SubEventCard key={sub.id} sub={sub} eventId={event.id} onRated={handleSubRated} />
-            ))}
           </div>
         )}
       </div>

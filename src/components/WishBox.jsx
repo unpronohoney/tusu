@@ -1,10 +1,25 @@
-import { useState } from 'react'
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore'
+import { useState, useEffect } from 'react'
+import { collection, addDoc, serverTimestamp, onSnapshot, query, orderBy, doc, updateDoc } from 'firebase/firestore'
 import { db } from '../firebase'
+
+function formatWhen(ts) {
+  if (!ts?.toDate) return ''
+  const d = ts.toDate()
+  return d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' })
+}
 
 export default function WishBox() {
   const [text, setText] = useState('')
   const [status, setStatus] = useState(null)
+  const [wishes, setWishes] = useState([])
+
+  useEffect(() => {
+    const q = query(collection(db, 'wishes'), orderBy('createdAt', 'desc'))
+    const unsub = onSnapshot(q, snap => {
+      setWishes(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    }, err => console.error('wishes load failed', err))
+    return unsub
+  }, [])
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -71,6 +86,49 @@ export default function WishBox() {
           </p>
         )}
       </form>
+
+      {wishes.length > 0 && (
+        <div className="flex flex-col gap-2 border-t pt-4" style={{ borderColor: '#e5e0d8' }}>
+          <p className="text-[11px] font-bold uppercase tracking-widest mb-1" style={{ color: '#9a8f87' }}>
+            eklenen istekler ({wishes.length})
+          </p>
+          <ul className="flex flex-col gap-2 max-h-80 overflow-y-auto pr-1">
+            {wishes.map(w => {
+              const done = !!w.done
+              const toggle = () => updateDoc(doc(db, 'wishes', w.id), { done: !done }).catch(console.error)
+              return (
+                <li key={w.id}
+                  className="rounded-xl px-3 py-2.5 flex items-start gap-3 transition-opacity"
+                  style={{ background: done ? '#f4f2ec' : '#faf9f6', border: '1px solid #ece6dd', opacity: done ? 0.65 : 1 }}>
+                  <button
+                    onClick={toggle}
+                    aria-label={done ? 'yapılmadı işaretle' : 'yapıldı işaretle'}
+                    className="mt-0.5 flex-shrink-0 w-5 h-5 rounded-md flex items-center justify-center transition-all active:scale-90"
+                    style={{
+                      background: done ? '#6fa86f' : '#ffffff',
+                      border: `1.5px solid ${done ? '#6fa86f' : '#c4bdb5'}`,
+                      color: '#ffffff',
+                      fontSize: '11px',
+                    }}>
+                    {done ? '✓' : ''}
+                  </button>
+                  <div className="flex-1 flex flex-col gap-1 min-w-0">
+                    <p className="text-sm leading-snug whitespace-pre-wrap"
+                      style={{ color: '#1e1916', textDecoration: done ? 'line-through' : 'none' }}>
+                      {w.text}
+                    </p>
+                    {w.createdAt && (
+                      <span className="text-[10px] self-end" style={{ color: '#c4bdb5' }}>
+                        {formatWhen(w.createdAt)}
+                      </span>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
+      )}
     </section>
   )
 }
