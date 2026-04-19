@@ -54,6 +54,7 @@ export default function EventCard({ event }) {
   const [loadingSubs, setLoadingSubs] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadErr, setUploadErr] = useState(null)
+  const [uploadProgress, setUploadProgress] = useState(null)
   const fileInputRef = useRef(null)
 
   const hasSubEvents = event.hasSubEvents
@@ -93,28 +94,44 @@ export default function EventCard({ event }) {
   }
 
   async function handleFileChange(e) {
-    const file = e.target.files?.[0]
+    const files = Array.from(e.target.files || [])
     e.target.value = ''
-    if (!file) return
+    if (!files.length) return
     setUploadErr(null)
     setUploading(true)
+    setUploadProgress({ done: 0, total: files.length })
+    const extToMime = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', heic: 'image/heic', heif: 'image/heif', gif: 'image/gif' }
+    const failed = []
     try {
       await authReady
-      const ext = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : 'jpg'
-      const path = `events/${event.id}/${Date.now()}.${ext}`
-      const r = storageRef(storage, path)
-      const extToMime = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', heic: 'image/heic', heif: 'image/heif', gif: 'image/gif' }
-      const contentType = file.type && file.type.startsWith('image/')
-        ? file.type
-        : (extToMime[ext] || 'image/jpeg')
-      await uploadBytes(r, file, { contentType })
-      const gsUrl = `gs://${r.bucket}/${path}`
-      await updateDoc(doc(db, 'events', event.id), { photos: arrayUnion(gsUrl) })
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]
+        try {
+          const ext = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : 'jpg'
+          const path = `events/${event.id}/${Date.now()}_${i}.${ext}`
+          const r = storageRef(storage, path)
+          const contentType = file.type && file.type.startsWith('image/')
+            ? file.type
+            : (extToMime[ext] || 'image/jpeg')
+          await uploadBytes(r, file, { contentType })
+          const gsUrl = `gs://${r.bucket}/${path}`
+          await updateDoc(doc(db, 'events', event.id), { photos: arrayUnion(gsUrl) })
+        } catch (err) {
+          console.error('upload failed for', file.name, err)
+          failed.push(file.name)
+        } finally {
+          setUploadProgress(p => ({ ...p, done: i + 1 }))
+        }
+      }
+      if (failed.length) {
+        setUploadErr(`${failed.length} foto yüklenemedi`)
+      }
     } catch (err) {
       console.error('upload failed', err)
       setUploadErr(err.message || 'yükleme başarısız')
     } finally {
       setUploading(false)
+      setUploadProgress(null)
     }
   }
 
@@ -151,6 +168,7 @@ export default function EventCard({ event }) {
               ref={fileInputRef}
               type="file"
               accept="image/*"
+              multiple
               className="hidden"
               onChange={handleFileChange}
             />
@@ -159,7 +177,9 @@ export default function EventCard({ event }) {
               disabled={uploading}
               className="text-[11px] font-medium px-3 py-1.5 rounded-xl transition-all active:scale-95 disabled:opacity-50 whitespace-nowrap"
               style={{ background: '#1e1916', color: '#f2efe9' }}>
-              {uploading ? 'yükleniyor…' : '＋ fotoğraf'}
+              {uploading
+                ? (uploadProgress ? `${uploadProgress.done}/${uploadProgress.total}` : 'yükleniyor…')
+                : '＋ fotoğraf'}
             </button>
             {uploadErr && (
               <span className="text-[10px]" style={{ color: '#c4847e' }}>{uploadErr}</span>
