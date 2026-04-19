@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { collection, onSnapshot, doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore'
 import { ref as storageRef, uploadBytes, deleteObject } from 'firebase/storage'
-import { db, storage } from '../firebase'
+import { db, storage, authReady } from '../firebase'
 import PhotoCarousel from './PhotoCarousel'
 import SubEventCard from './SubEventCard'
 import DualRating from './DualRating'
@@ -79,6 +79,7 @@ export default function EventCard({ event }) {
 
   async function handleDeletePhoto(photoUrl) {
     try {
+      await authReady
       await updateDoc(doc(db, 'events', event.id), { photos: arrayRemove(photoUrl) })
       try {
         await deleteObject(storageRef(storage, photoUrl))
@@ -98,10 +99,15 @@ export default function EventCard({ event }) {
     setUploadErr(null)
     setUploading(true)
     try {
-      const ext = file.name.includes('.') ? file.name.split('.').pop() : 'jpg'
+      await authReady
+      const ext = file.name.includes('.') ? file.name.split('.').pop().toLowerCase() : 'jpg'
       const path = `events/${event.id}/${Date.now()}.${ext}`
       const r = storageRef(storage, path)
-      await uploadBytes(r, file)
+      const extToMime = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', heic: 'image/heic', heif: 'image/heif', gif: 'image/gif' }
+      const contentType = file.type && file.type.startsWith('image/')
+        ? file.type
+        : (extToMime[ext] || 'image/jpeg')
+      await uploadBytes(r, file, { contentType })
       const gsUrl = `gs://${r.bucket}/${path}`
       await updateDoc(doc(db, 'events', event.id), { photos: arrayUnion(gsUrl) })
     } catch (err) {
