@@ -4,6 +4,7 @@ import { db } from '../firebase'
 import EventCard from './EventCard'
 import WishBox from './WishBox'
 import KissModal from './KissModal'
+import CreateEventModal from './CreateEventModal'
 
 function getDate(e) {
   if (!e.date) return new Date(0)
@@ -15,6 +16,7 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [kissOpen, setKissOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
 
   useEffect(() => {
     const q = query(collection(db, 'events'), orderBy('date', 'desc'))
@@ -53,12 +55,20 @@ export default function Dashboard() {
               her an seninle güzel
             </p>
           </div>
-          <button
-            onClick={() => setKissOpen(true)}
-            className="text-xs font-medium px-3 py-1.5 rounded-full transition-all active:scale-95 hover:scale-105"
-            style={{ background: '#1e1916', color: '#f2efe9' }}>
-            tuanna ♡
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCreateOpen(true)}
+              className="text-xs font-medium px-3 py-1.5 rounded-full transition-all active:scale-95 hover:scale-105"
+              style={{ background: '#ffffff', color: '#1e1916', border: '1.5px solid #1e1916' }}>
+              ＋ anı
+            </button>
+            <button
+              onClick={() => setKissOpen(true)}
+              className="text-xs font-medium px-3 py-1.5 rounded-full transition-all active:scale-95 hover:scale-105"
+              style={{ background: '#1e1916', color: '#f2efe9' }}>
+              tuanna ♡
+            </button>
+          </div>
         </div>
       </header>
 
@@ -125,6 +135,7 @@ export default function Dashboard() {
       </main>
 
       {kissOpen && <KissModal onClose={() => setKissOpen(false)} />}
+      {createOpen && <CreateEventModal onClose={() => setCreateOpen(false)} />}
     </div>
   )
 }

@@ -4,12 +4,12 @@ import { getStorage } from "firebase/storage";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID
+  apiKey: "AIzaSyAbTH4tsY0HkWFi4dlNpCM6IIHftiEwu9o",
+  authDomain: "tuanna-f9e77.firebaseapp.com",
+  projectId: "tuanna-f9e77",
+  storageBucket: "tuanna-f9e77.firebasestorage.app",
+  messagingSenderId: "311225408623",
+  appId: "1:311225408623:web:a6702645c095747749019a"
 };
 
 // Uygulamayı başlat
